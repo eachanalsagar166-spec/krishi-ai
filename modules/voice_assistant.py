@@ -219,10 +219,31 @@ def _same_origin(request) -> bool:
     origin = request.headers.get("origin")
     if not origin:
         return True  # same-origin fetches from some browsers omit Origin on POST; the token still applies
-    return urlparse(origin).netloc == request.headers.get("host")
+    # Behind a proxy (e.g. Streamlit Community Cloud) the public host arrives as X-Forwarded-Host
+    hosts = {h.strip() for h in (request.headers.get("x-forwarded-host") or "").split(",") if h.strip()}
+    hosts.add(request.headers.get("host") or "")
+    return urlparse(origin).netloc in hosts
 
 
-async def bolna_session_endpoint(request):
+def _guarded(handler):
+    """Logs unexpected errors with a traceback and answers with JSON instead of a bare 500."""
+    async def endpoint(request):
+        from starlette.responses import JSONResponse
+        try:
+            return await handler(request)
+        except Exception as exc:  # noqa: BLE001 - last-resort guard for a public route
+            logger.exception("Voice route %s failed", request.url.path)
+            detail = f"{type(exc).__name__}: {exc}"[:200]
+            key = get_setting("BOLNA_API_KEY")
+            if key:
+                detail = detail.replace(key, "[redacted]")
+            return JSONResponse({"error": "server_error", "message": "The voice service hit an unexpected error.",
+                                 "detail": detail}, status_code=500, headers={"Cache-Control": "no-store"})
+    endpoint.__name__ = getattr(handler, "__name__", "endpoint")
+    return endpoint
+
+
+async def _bolna_session(request):
     """Starlette handler for POST /api/bolna-session."""
     from starlette.concurrency import run_in_threadpool
     from starlette.responses import JSONResponse
@@ -356,7 +377,7 @@ def place_bolna_call(api_key: str, agent_id: str, phone: str,
     return _error(502, "upstream_error", "The voice service returned an error.", detail=message)
 
 
-async def bolna_call_endpoint(request):
+async def _bolna_call(request):
     """Starlette handler for POST /api/bolna-call: the agent phones the visitor's number."""
     from starlette.concurrency import run_in_threadpool
     from starlette.responses import JSONResponse
@@ -426,8 +447,9 @@ async def widget_script_endpoint(request):
 def widget_config(token: str) -> Dict[str, Any]:
     """Everything the browser needs. Contains no secrets."""
     return {
-        "sessionUrl": SESSION_ROUTE,
-        "callUrl": CALL_ROUTE,
+        # Relative URLs: the app may be served under a path prefix (Streamlit Cloud uses /~/+/)
+        "sessionUrl": SESSION_ROUTE.lstrip("/"),
+        "callUrl": CALL_ROUTE.lstrip("/"),
         "countryCode": allowed_country_codes()[0],
         "tokenHeader": TOKEN_HEADER,
         "token": token,
@@ -453,6 +475,11 @@ def render_voice_widget():
         st.html(
             f"<script>window.__kiVoiceConfig = {config};"
             f" if (window.__kiVoice) window.__kiVoice.updateConfig(window.__kiVoiceConfig);</script>"
-            f'<script src="{WIDGET_SCRIPT_ROUTE}?v={_widget_version()}"></script>',
+            f'<script src="{WIDGET_SCRIPT_ROUTE.lstrip("/")}?v={_widget_version()}"></script>',
             unsafe_allow_javascript=True,
         )
+
+
+# Public route handlers (wrapped so failures are logged and returned as JSON)
+bolna_session_endpoint = _guarded(_bolna_session)
+bolna_call_endpoint = _guarded(_bolna_call)
