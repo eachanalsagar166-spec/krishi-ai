@@ -1,0 +1,37 @@
+[theme]
+# Light natural palette (mirrors modules/ui.py COLORS)
+base = "light"
+primaryColor = "#26734D"
+backgroundColor = "#F5F5F0"
+secondaryBackgroundColor = "#F7F7F2"
+textColor = "#202720"
+borderColor = "#E6E9E3"
+showWidgetBorder = true
+showSidebarBorder = true
+linkColor = "#26734D"
+greenColor = "#26734D"
+redColor = "#C65B52"
+orangeColor = "#D69A32"
+yellowColor = "#D69A32"
+blueColor = "#142D22"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400..700&display=swap, sans-serif"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400..700&display=swap, sans-serif"
+baseFontSize = 15
+baseRadius = "0.5rem"
+buttonRadius = "0.5rem"
+dataframeBorderColor = "#E6E9E3"
+dataframeHeaderBackgroundColor = "#FAFAF7"
+chartCategoricalColors = ["#26734D", "#A8C3AD", "#142D22", "#D69A32", "#C65B52", "#777F78"]
+
+[theme.sidebar]
+backgroundColor = "#FAFAF7"
+secondaryBackgroundColor = "#FFFFFF"
+borderColor = "#E6E9E3"
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+
+[client]
+toolbarMode = "minimal"
