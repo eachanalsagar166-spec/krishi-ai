@@ -124,6 +124,7 @@ QUICK_ACTIONS = [
     ("qa_offer", "Check a buyer's offer", "shield-check", "Fraud Detector"),
 ]
 BUTTON_ICONS = {
+    "voice_fab": "phone",
     "auth_tab_signin": "log-in",
     "auth_tab_signup": "user-plus",
     "auth_tab_forgot": "key-round",

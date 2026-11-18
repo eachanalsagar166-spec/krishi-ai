@@ -95,11 +95,18 @@ def _secrets_file_values() -> Dict[str, Any]:
 
 
 def get_setting(name: str, default: str = "") -> str:
-    """Environment variable first, then .streamlit/secrets.toml."""
+    """Environment variable, then .streamlit/secrets.toml, then st.secrets (Streamlit Cloud)."""
     value = os.environ.get(name, "").strip()
     if not value:
         raw = _secrets_file_values().get(name)
         value = str(raw).strip() if raw is not None else ""
+    if not value:
+        try:
+            import streamlit as st
+            raw = st.secrets.get(name)
+            value = str(raw).strip() if raw is not None else ""
+        except Exception:
+            value = ""
     return value or default
 
 
@@ -466,25 +473,142 @@ def widget_config(token: str) -> Dict[str, Any]:
     }
 
 
+# ------------------------------------------------------------------------------
+# Native Streamlit call button + dialog
+# ------------------------------------------------------------------------------
+# The floating button is a real Streamlit button and the call is placed from
+# Python, so no custom HTTP route is needed. This works on any host, including
+# Streamlit Community Cloud, whose proxy does not pass custom API routes through.
+CALL_MESSAGES = {
+    "invalid_number": "Enter a valid mobile number, for example +91 98765 43210.",
+    "country_not_allowed": "We can only call Indian (+91) mobile numbers.",
+    "rate_limited": "You've requested several calls in a short time. Please wait a few minutes.",
+    "not_configured": "The voice assistant isn't set up yet. Please try again later.",
+    "line_activating": "Our calling line is still being activated. Please try again in a few minutes.",
+    "at_capacity": "All our assistants are busy right now. Please try again in a minute.",
+}
+FAB_CSS = """
+.st-key-voice_fab { position: fixed !important; right: calc(24px + env(safe-area-inset-right, 0px));
+  bottom: calc(24px + env(safe-area-inset-bottom, 0px)); z-index: 999990; width: auto !important; }
+.st-key-voice_fab button { width: 56px !important; height: 56px !important; min-height: 56px !important;
+  border-radius: 50% !important; padding: 0 !important; justify-content: center !important;
+  background: #26734D !important; border: 0 !important; color: #FFFFFF !important;
+  box-shadow: 0 1px 2px rgba(20,45,34,.12), 0 10px 28px -10px rgba(20,45,34,.55) !important;
+  transition: background-color .2s ease, transform .2s ease !important; }
+.st-key-voice_fab button:hover { background: #1F5F40 !important; transform: translateY(-2px); }
+.st-key-voice_fab button p { display: none !important; }
+.st-key-voice_fab button::before { margin-right: 0 !important; width: 24px !important; height: 24px !important;
+  flex-basis: 24px !important; background-color: #FFFFFF !important; }
+@media (max-width: 640px) {
+  .st-key-voice_fab { right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+  .st-key-voice_fab button { width: 52px !important; height: 52px !important; min-height: 52px !important; }
+}
+"""
+
+
+def _call_allowed(phone: str) -> bool:
+    import streamlit as st
+    sid = st.session_state.setdefault("_voice_sid", secrets.token_hex(8))
+    return _call_limiter_client.allow("session:" + sid) and _call_limiter_number.allow(phone)
+
+
+def request_phone_call(raw_phone: str) -> Tuple[str, str]:
+    """Validates and places a "call me" request. Returns (kind, message) for the UI."""
+    codes = allowed_country_codes()
+    phone = normalize_phone(raw_phone, default_cc=codes[0])
+    if not phone:
+        return "error", CALL_MESSAGES["invalid_number"]
+    if not phone.startswith(codes):
+        return "error", CALL_MESSAGES["country_not_allowed"]
+    if not _call_allowed(phone):
+        return "error", CALL_MESSAGES["rate_limited"]
+    api_key = get_setting("BOLNA_API_KEY")
+    if not api_key:
+        logger.warning("Phone call requested but BOLNA_API_KEY is not set")
+        return "error", CALL_MESSAGES["not_configured"]
+    status, payload = place_bolna_call(api_key, get_setting("BOLNA_AGENT_ID", DEFAULT_AGENT_ID), phone,
+                                       get_setting("BOLNA_FROM_NUMBER"), {"source": "krishi-ai-website"})
+    if status == 200:
+        return "success", (f"Calling you now. Your phone ({payload['phone']}) will ring in a few seconds; "
+                           "answer it to talk to the Krishi assistant.")
+    code = payload.get("error", "")
+    if code in ("upstream_auth", "agent_not_found", "from_number_invalid", "upstream_error", "bad_request"):
+        logger.warning("Call failed: %s %s", code, payload.get("detail", ""))
+    return "error", CALL_MESSAGES.get(code, "We couldn't place the call. Please try again.")
+
+
+def _browser_call_html(session: Dict[str, Any]) -> str:
+    """A small in-dialog web-call UI. No '<' inside the script: st.html drops scripts that look like markup."""
+    box = "kvc-web-" + secrets.token_hex(4)
+    data = json.dumps(session).replace("<", "\\u003c")
+    script = """
+(function () {
+  var S = %s, SDK = %s, SRI = %s, host = document.getElementById(%s);
+  if (!host) return;
+  var btn = document.createElement("button"), status = document.createElement("div"), call = null;
+  btn.type = "button"; btn.textContent = "Start browser call";
+  btn.style.cssText = "width:100%%;height:40px;border-radius:8px;border:0;background:#26734D;color:#fff;font:inherit;font-weight:500;cursor:pointer";
+  status.style.cssText = "margin-top:8px;font-size:13px;color:#777F78";
+  status.textContent = "Allow microphone access when your browser asks. This link expires in 2 minutes.";
+  host.appendChild(btn); host.appendChild(status);
+  function load() {
+    if (window.BolnaWebCall) return Promise.resolve(window.BolnaWebCall);
+    return new Promise(function (ok, bad) {
+      var s = document.createElement("script"); s.src = SDK; s.integrity = SRI; s.crossOrigin = "anonymous";
+      s.onload = function () { ok(window.BolnaWebCall); }; s.onerror = bad; document.head.appendChild(s);
+    });
+  }
+  btn.onclick = function () {
+    if (call) { call.stop(); return; }
+    btn.disabled = true; status.textContent = "Connecting...";
+    load().then(function (Web) {
+      call = new Web({ session: S });
+      call.on("call-start", function () { btn.disabled = false; btn.textContent = "End call"; btn.style.background = "#C65B52"; status.textContent = "Live. Speak naturally."; });
+      call.on("call-end", function () { btn.disabled = true; btn.textContent = "Call ended"; btn.style.background = "#A8C3AD"; status.textContent = "Close this window and reopen it to call again."; call = null; });
+      call.on("error", function (e) {
+        btn.disabled = true; btn.style.background = "#A8C3AD";
+        status.textContent = (e && e.code === "microphone_denied") ? "Microphone access is blocked. Allow it in your browser and try again." : "We couldn't start the call. Please try again.";
+      });
+      return call.start();
+    }).catch(function () { btn.disabled = true; status.textContent = "We couldn't start the call. Please try again."; });
+  };
+  window.addEventListener("pagehide", function () { if (call) call.stop(); });
+})();
+""" % (data, json.dumps(SDK_URL), json.dumps(SDK_INTEGRITY), json.dumps(box))
+    return f'<div id="{box}"></div><script>{script}</script>'
+
+
 def render_voice_widget():
-    """Adds the floating call button to the current page (call once per run, from the shared layout)."""
+    """Floating call button + "Call me" dialog (call once per run, from the shared layout)."""
     import streamlit as st
 
-    if not voice_route_mounted():
-        return  # started with `streamlit run app.py`: no session route, so no button
-    now = time.time()
-    if not st.session_state.get("_voice_token") or now - st.session_state.get("_voice_token_ts", 0) > 3600:
-        st.session_state["_voice_token"] = issue_voice_token(now)
-        st.session_state["_voice_token_ts"] = now
-    # No "<" in the inline config: st.html's sanitizer drops scripts whose text looks like markup
-    config = json.dumps(widget_config(st.session_state["_voice_token"])).replace("<", "\\u003c")
-    with st.container(key="voice_widget_host"):
-        st.html(
-            f"<script>window.__kiVoiceConfig = {config};"
-            f" if (window.__kiVoice) window.__kiVoice.updateConfig(window.__kiVoiceConfig);</script>"
-            f'<script src="{WIDGET_SCRIPT_ROUTE.lstrip("/")}?v={_widget_version()}"></script>',
-            unsafe_allow_javascript=True,
-        )
+    @st.dialog("Get a call from our assistant")
+    def voice_dialog():
+        st.caption("Enter your mobile number and the Krishi assistant will ring you right away.")
+        phone = st.text_input("Your mobile number", key="voice_phone", placeholder="+91 98765 43210")
+        if st.button("Call me", type="primary", width="stretch", key="voice_call_me"):
+            st.session_state["voice_result"] = request_phone_call(phone)
+        result = st.session_state.get("voice_result")
+        if result:
+            (st.success if result[0] == "success" else st.error)(result[1])
+        st.caption("Our AI assistant will call this number now. Standard call rates may apply.")
+        st.divider()
+        if st.button("Talk in the browser instead", width="stretch", key="voice_web"):
+            api_key = get_setting("BOLNA_API_KEY")
+            if not api_key:
+                st.error(CALL_MESSAGES["not_configured"])
+            else:
+                status, session = mint_bolna_session(api_key, get_setting("BOLNA_AGENT_ID", DEFAULT_AGENT_ID))
+                if status == 200:
+                    st.html(_browser_call_html(session), unsafe_allow_javascript=True)
+                else:
+                    st.error(CALL_MESSAGES.get(session.get("error", ""), "We couldn't start the call. Please try again."))
+
+    st.html(f"<style>{FAB_CSS}</style>")
+    with st.container(key="voice_fab"):
+        if st.button("Call us", key="voice_fab_btn", help="Talk to our AI assistant"):
+            st.session_state.pop("voice_result", None)
+            voice_dialog()
 
 
 # Public route handlers (wrapped so failures are logged and returned as JSON)
