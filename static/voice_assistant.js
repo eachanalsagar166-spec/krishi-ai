@@ -246,10 +246,14 @@
   }
   function stopTimer() { if (timerId) { clearInterval(timerId); timerId = null; } }
 
+  // GET with custom headers: works behind Streamlit Community Cloud's proxy (which drops
+  // POSTs to custom routes), keeps the phone number out of URLs, and custom headers
+  // cannot be sent cross-site without a CORS preflight we never allow.
   function postJson(url, body) {
-    var headers = { "Content-Type": "application/json" };
+    var headers = {};
     headers[cfg.tokenHeader || "x-krishi-voice-token"] = cfg.token || "";
-    return fetch(url, { method: "POST", headers: headers, body: JSON.stringify(body || {}), credentials: "same-origin", cache: "no-store" })
+    if (body && body.phone) headers[cfg.phoneHeader || "x-krishi-phone"] = body.phone;
+    return fetch(url, { method: "GET", headers: headers, credentials: "same-origin", cache: "no-store" })
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (data) {
           if (!r.ok) {

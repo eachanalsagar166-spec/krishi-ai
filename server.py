@@ -29,8 +29,9 @@ os.environ[ROUTE_FLAG_ENV] = "1"
 app = st.App(
     "app.py",
     routes=[
-        Route(SESSION_ROUTE, bolna_session_endpoint, methods=["POST"]),
-        Route(CALL_ROUTE, bolna_call_endpoint, methods=["POST"]),
+        # GET as well as POST: Streamlit Community Cloud's proxy drops POSTs to custom routes
+        Route(SESSION_ROUTE, bolna_session_endpoint, methods=["GET", "POST"]),
+        Route(CALL_ROUTE, bolna_call_endpoint, methods=["GET", "POST"]),
         Route(WIDGET_SCRIPT_ROUTE, widget_script_endpoint, methods=["GET"]),
     ],
 )

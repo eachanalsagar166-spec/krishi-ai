@@ -50,6 +50,7 @@ SDK_INTEGRITY = "sha384-eIwZYmjK+HzlUdEuzvTa1rYdY23/D0fy+vJe8XlqhzxXELVUw9bCEhdO
 
 # --- Route guards --------------------------------------------------------------
 TOKEN_HEADER = "x-krishi-voice-token"
+PHONE_HEADER = "x-krishi-phone"
 TOKEN_TTL_SECONDS = 6 * 3600
 RATE_LIMIT_CALLS = 5           # session mints allowed ...
 RATE_LIMIT_WINDOW = 600        # ... per client per 10 minutes
@@ -266,7 +267,7 @@ async def _bolna_session(request):
         return reply(_error(503, "not_configured", "The voice assistant is not set up yet."))
     agent_id = get_setting("BOLNA_AGENT_ID", DEFAULT_AGENT_ID)
 
-    raw = await request.body()
+    raw = await request.body() if request.method == "POST" else b""
     if len(raw) > MAX_BODY_BYTES:
         return reply(_error(413, "payload_too_large", "Request is too large."))
     user_data = None
@@ -391,13 +392,18 @@ async def _bolna_call(request):
     if not verify_voice_token(request.headers.get(TOKEN_HEADER)):
         return reply(_error(401, "invalid_token", "This page has expired. Reload it and try again."))
 
-    raw = await request.body()
-    if len(raw) > 4096:
-        return reply(_error(413, "payload_too_large", "Request is too large."))
-    try:
-        parsed = json.loads(raw or b"{}")
-    except ValueError:
-        return reply(_error(400, "bad_json", "Request body must be JSON."))
+    if request.method == "GET":
+        # Streamlit Community Cloud's proxy only forwards GET to custom routes, so the
+        # number travels in a header (never in the URL, which proxies log).
+        parsed = {"phone": request.headers.get(PHONE_HEADER, "")}
+    else:
+        raw = await request.body()
+        if len(raw) > 4096:
+            return reply(_error(413, "payload_too_large", "Request is too large."))
+        try:
+            parsed = json.loads(raw or b"{}")
+        except ValueError:
+            return reply(_error(400, "bad_json", "Request body must be JSON."))
     codes = allowed_country_codes()
     phone = normalize_phone(parsed.get("phone") if isinstance(parsed, dict) else None, default_cc=codes[0])
     if not phone:
@@ -452,6 +458,7 @@ def widget_config(token: str) -> Dict[str, Any]:
         "callUrl": CALL_ROUTE.lstrip("/"),
         "countryCode": allowed_country_codes()[0],
         "tokenHeader": TOKEN_HEADER,
+        "phoneHeader": PHONE_HEADER,
         "token": token,
         "sdkUrl": SDK_URL,
         "sdkIntegrity": SDK_INTEGRITY,
