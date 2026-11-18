@@ -489,7 +489,7 @@ CALL_MESSAGES = {
 }
 FAB_CSS = """
 .st-key-voice_fab { position: fixed !important; right: calc(24px + env(safe-area-inset-right, 0px));
-  bottom: calc(24px + env(safe-area-inset-bottom, 0px)); z-index: 999990; width: auto !important; }
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px)); z-index: 999990; width: auto !important; }
 .st-key-voice_fab button { width: 56px !important; height: 56px !important; min-height: 56px !important;
   border-radius: 50% !important; padding: 0 !important; justify-content: center !important;
   background: #26734D !important; border: 0 !important; color: #FFFFFF !important;
@@ -500,7 +500,7 @@ FAB_CSS = """
 .st-key-voice_fab button::before { margin-right: 0 !important; width: 24px !important; height: 24px !important;
   flex-basis: 24px !important; background-color: #FFFFFF !important; }
 @media (max-width: 640px) {
-  .st-key-voice_fab { right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+  .st-key-voice_fab { right: calc(16px + env(safe-area-inset-right, 0px)); bottom: calc(64px + env(safe-area-inset-bottom, 0px)); }
   .st-key-voice_fab button { width: 52px !important; height: 52px !important; min-height: 52px !important; }
 }
 """
